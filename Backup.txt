@@ -1,0 +1,2518 @@
+using System.Data;
+using System.Net;
+using System.Reflection;
+using System.Text.RegularExpressions;
+using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
+using System.Text;
+using Nancy.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Mvc;
+using Nancy;
+using System.Globalization;
+using Nancy.Responses;
+using System.Runtime.CompilerServices;
+using Microsoft.AspNetCore.Hosting.Server;
+using System.Net.Mail;
+using Microsoft.Reporting.NETCore;
+
+namespace SIPL_ShoppingCart.Models
+{
+    public class CommonMethod
+    {
+        private const string HttpContext1 = "MS_HttpContext";
+        private const string RemoteEndpointMessage = "System.ServiceModel.Channels.RemoteEndpointMessageProperty";
+        static string ConnectionString = GetConfigData("AppSetting", "ConnectionStrings");
+        public static SIPLLib.DatabaseFunction SIPLDB = new SIPLLib.DatabaseFunction(ConnectionString);
+        public static SIPLLib.GeneralFunction SIPLGF = new SIPLLib.GeneralFunction();
+        private static IConfiguration config;
+        public static string GetConfigData(string Section, string Key)
+        {
+            var builder = new ConfigurationBuilder().AddJsonFile($"appsettings.json", true, true);
+            return builder.Build().GetSection(Section).GetSection(Key).Value.ToString();
+        }
+        public static void InsertApiLog(string RequestString, string ResponseString, string IPAddress, string CallType, string UserCode)
+        {
+            string[,] ParamLog = new string[,]{
+                {"@RequestString",RequestString },
+                {"@ResponseString",ResponseString },
+                {"@IPAddress", IPAddress},
+                {"@CallType",CallType },
+                {"@UserCode",UserCode},
+               };
+            CommonMethod.SIPLDB.FillDataInDT(ParamLog, "USP_InsertApiLog");
+        }
+       
+        public static bool IsPhoneNumber(string number)
+        {
+            bool IsValidMOb = Regex.Match(number, @"^(\+\d{1,3}[- ]?)?\d{10}$").Success;
+            return IsValidMOb;
+        }
+        public static DataTable CreateDataTable<T>(IEnumerable<T> list)
+        {
+            Type type = typeof(T);
+            var properties = type.GetProperties();
+
+            DataTable dataTable = new DataTable();
+            foreach (PropertyInfo info in properties)
+            {
+                dataTable.Columns.Add(new DataColumn(info.Name, Nullable.GetUnderlyingType(info.PropertyType) ?? info.PropertyType));
+            }
+
+            foreach (T entity in list)
+            {
+                object[] values = new object[properties.Length];
+                for (int i = 0; i < properties.Length; i++)
+                {
+                    values[i] = properties[i].GetValue(entity) == null ? "" : properties[i].GetValue(entity);
+                }
+
+                dataTable.Rows.Add(values);
+            }
+
+
+            return dataTable;
+        }
+        public static string GetJSONFromObject(object o)
+        {
+            string json = string.Empty;
+            try
+            {
+                json = new JavaScriptSerializer().Serialize(o);
+            }
+            catch (Exception)
+            {
+                //Handle Exception Code
+            }
+
+            return json;
+        }
+        public static bool GetClientLoginToken(string Token, string UserCode)
+        {
+            bool Status = false;
+            DataTable dt = new DataTable();
+            try
+            {
+                string[,] param = new string[,] {
+                {"@LoginToken",Token.Trim() },
+                {"@UserCode",UserCode.Trim() }
+                };
+                dt = SIPLDB.FillDataInDT(param, "USP_CheckValidToken");
+                if (dt.Rows.Count > 0)
+                {
+                    Status = dt.Rows[0]["Status"].ToString() == "1" ? true : false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Status = false;
+            }
+            return Status;
+        }
+        public static bool CheckValidUserCode(string UserCode)
+        {
+            bool Res = false;
+            try
+            {
+                string[,] param = new string[,] {
+                {"@UserCode",UserCode.Trim() },
+                };
+                DataTable dt = SIPLDB.FillDataInDT(param, "USP_CheckUserCode");
+                if (dt.Rows.Count > 0)
+                {
+                    Res = dt.Rows[0]["Result"].ToString() == "1" ? true : false;
+                }
+            }
+            catch (Exception Ex)
+            {
+                Res = false;
+            }
+            return Res;
+
+        }
+        public static bool CheckUserRights(string LoginUserCode, string PageUrl, string Action)
+        {
+            bool status = false;
+            try
+            {
+                string[,] Param = new string[,] {
+                {"@LoginUserCode",LoginUserCode.Trim()},
+                {"@PageUrl",PageUrl.Trim() },
+                {"@Action",Action.Trim() }
+                };
+                DataTable dt = SIPLDB.FillDataInDT(Param, "USP_CheckUserRights");
+                if (dt.Rows.Count > 0)
+                {
+                    status = Convert.ToBoolean(dt.Rows[0]["Status"].ToString());
+                }
+            }
+            catch (Exception)
+            {
+                status = false;
+            }
+            return status;
+        }
+        public static string ConvertDataTableToJSON(DataTable dt)
+        {
+            if (dt.Rows.Count > 0)
+            {
+                if (dt.Columns.Contains("RemoveColumns"))
+                {
+                    string[] strArr = dt.Rows[0]["RemoveColumns"].ToString().Split(',');
+                    if (strArr.Length > 0)
+                    {
+                        foreach (string s in strArr)
+                        {
+                            if (dt.Columns.Contains(s.Trim()))
+                                dt.Columns.Remove(s.Trim());
+                        }
+                        dt.AcceptChanges();
+                    }
+                }
+                if (dt.Columns.Contains("HideColumns"))
+                {
+                    string[] strArr = dt.Rows[0]["HideColumns"].ToString().Split(',');
+                    if (strArr.Length > 0)
+                    {
+                        foreach (string s in strArr)
+                        {
+                            if (dt.Columns.Contains(s.Trim()))
+                                dt.Columns.Remove(s.Trim());
+                        }
+                        dt.AcceptChanges();
+                    }
+                }
+                foreach (DataRow row in dt.Rows)
+                {
+                    for (int i = 0; i < dt.Columns.Count; i++)
+                    {
+                        if (row.IsNull(i))
+                        {
+                            row[i] = "";
+                        }
+                    }
+                }
+            }
+
+            return JsonConvert.SerializeObject(dt, Newtonsoft.Json.Formatting.Indented);
+        }
+        public static string GetPdfBase64String(string pdfUrl)
+        {
+            using (WebClient client = new())
+            {
+                // Download the PDF file
+                byte[] pdfBytes = client.DownloadData(pdfUrl);
+
+                // Convert the PDF bytes to Base64
+                string base64String = Convert.ToBase64String(pdfBytes);
+
+                return base64String;
+            }
+        }
+        public static string PleaseEnterValidateMessage(string FieldName, string Type)
+        {
+            string Result = "";
+            if (Type == "1")
+            {
+                Result = "Please select " + FieldName + ".!";
+            }
+            else if (Type == "2")
+            {
+                Result = "Please enter valid " + FieldName + ".!";
+            }
+            else if (Type == "3")
+            {
+                Result = "Please enter " + FieldName + ".!";
+            }
+            else if (Type == "4")
+            {
+                Result = "Request Json is not proper.!";
+            }
+            else if (Type == "5")
+            {
+                Result = FieldName + " should greater Than 0.!";
+            }
+            else if (Type == "6")
+            {
+                Result = FieldName + " should be numeric.!";
+            }
+            else if (Type == "7")
+            {
+                Result = FieldName + " should be less than or equal to current date.!";
+            }
+            else if (Type == "8")
+            {
+                Result = FieldName + " should be greater than or equal to from date.!";
+            }
+            else if (Type == "9")
+            {
+                Result = "Please enter valid Token. !";
+            }
+            else if (Type == "10")
+            {
+                Result = "Please enter Login Token. !";
+            }
+            else if (Type == "11")
+            {
+                Result = "Please enter Login User Code. !";
+            }
+            else if (Type == "12")
+            {
+                Result = FieldName + "  should not be blank Or null .!";
+            }
+            else
+            {
+                Result = "Please Enter " + FieldName + ".!";
+            }
+            return Result;
+        }
+
+       
+        public static StringBuilder CreateJsonForTable(DataTable dt, string Type = "")
+        {
+            StringBuilder JsonString = new StringBuilder();
+            if (dt.Rows.Count > 0)
+            {
+                string HeadersKey = "", HeadersValue = "", Actions = "", HideColumns = "", TabTypes = "", Dropdown = "", ImageHeaderValue = "";
+                if (!dt.Columns.Contains("TotalRecord"))
+                {
+                    dt.Columns.Add("TotalRecord", typeof(string));
+                    dt.Rows[0]["TotalRecord"] = dt.Rows.Count.ToString();
+                }
+                if (!dt.Columns.Contains("PageSize"))
+                {
+                    dt.Columns.Add("PageSize", typeof(string));
+                    dt.Rows[0]["PageSize"] = "10000";
+                }
+                if (dt.Columns.Contains("HeadersKey"))
+                {
+                    foreach (string s in dt.Rows[0]["HeadersKey"].ToString().Split(','))
+                    {
+                        HeadersKey += s.Replace("\n", "").Replace("\t", "").Replace("\r", "").Trim() + ",";
+                    }
+                    HeadersKey = HeadersKey.TrimStart(',').TrimEnd(',');
+                }
+                if (dt.Columns.Contains("TabTypes"))
+                {
+                    foreach (string s in dt.Rows[0]["TabTypes"].ToString().Split(','))
+                    {
+                        TabTypes += s.Replace("\n", "").Replace("\t", "").Replace("\r", "").Trim() + ",";
+                    }
+                    TabTypes = TabTypes.TrimStart(',').TrimEnd(',');
+                }
+                if (dt.Columns.Contains("Dropdown"))
+                {
+                    foreach (string s in dt.Rows[0]["Dropdown"].ToString().Split(','))
+                    {
+                        Dropdown += s.Replace("\n", "").Replace("\t", "").Replace("\r", "").Trim() + ",";
+                    }
+                    Dropdown = Dropdown.TrimStart(',').TrimEnd(',');
+                }
+                if (dt.Columns.Contains("HeadersValue"))
+                {
+                    foreach (string s in dt.Rows[0]["HeadersValue"].ToString().Split(','))
+                    {
+                        HeadersValue += s.Replace("\n", "").Replace("\t", "").Replace("\r", "") + ",";
+                    }
+                    HeadersValue = HeadersValue.TrimStart(',').TrimEnd(',');
+                }
+
+                if (dt.Columns.Contains("Actions"))
+                {
+                    foreach (string s in dt.Rows[0]["Actions"].ToString().Split(','))
+                    {
+                        Actions += s.Replace("\n", "").Replace("\t", "").Replace("\r", "") + ",";
+                    }
+                    Actions = Actions.TrimStart(',').TrimEnd(',');
+                }
+                if (dt.Columns.Contains("HideColumns"))
+                {
+                    foreach (string s in dt.Rows[0]["HideColumns"].ToString().Split(','))
+                    {
+                        HideColumns += s.Replace("\n", "").Replace("\t", "").Replace("\r", "") + ",";
+                    }
+                    HideColumns = HideColumns.TrimStart(',').TrimEnd(',');
+
+                }
+                //-----
+                if (dt.Columns.Contains("ImageValue"))
+                {
+                    foreach (string s in dt.Rows[0]["ImageValue"].ToString().Split(','))
+                    {
+                        ImageHeaderValue += s.Replace("\n", "").Replace("\t", "").Replace("\r", "").Trim() + ",";
+                    }
+                    ImageHeaderValue = ImageHeaderValue.TrimStart(',').TrimEnd(',');
+                }
+                //----
+
+                JsonString.Append("{");
+                JsonString.Append("\"Status\":\"@@Status\",");
+                JsonString.Append("\"Message\":\"@@Message\",");
+                if (Type.Trim().ToUpper() != "E")
+                {
+                    JsonString.Append("\"TotalRecord\":" + dt.Rows[0]["TotalRecord"].ToString() + ",");
+                    JsonString.Append("\"PageSize\":" + dt.Rows[0]["PageSize"].ToString() + ",");
+                }
+                if (HeadersValue.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"HeadersValue\":[\"" + HeadersValue.Replace(",", "\",\"") + "\"],");
+                else
+                    JsonString.Append("\"HeadersValue\":[],");
+                if (HeadersKey.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"HeadersKey\":[\"" + HeadersKey.Replace(",", "\",\"") + "\"],");
+                else
+                    JsonString.Append("\"HeadersKey\":[],");
+                if (TabTypes.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"TabTypes\":[\"@@TabTypes\"],");
+                else
+                    JsonString.Append("\"TabTypes\":[],");
+
+                if (Dropdown.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"Dropdown\":[\"" + Dropdown.Replace(",", "\",\"") + "\"],");
+                else
+                    JsonString.Append("\"Dropdown\":[],");
+
+                //-----------
+                if (ImageHeaderValue.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"ImageHeaderValue\":[\"" + ImageHeaderValue.Replace(",", "\",\"") + "\"],");
+                else
+                    JsonString.Append("\"ImageHeaderValue\":[],");
+                //----------
+                if (Type.Trim().ToUpper() != "E")
+                {
+                    if (dt.Columns.Contains("Actions") && Actions.Replace(",", "\",\"").Trim() != "")
+                        JsonString.Append("\"Actions\":[\"" + Actions.Replace(",", "\",\"") + "\"],");
+                    else
+                        JsonString.Append("\"Actions\":[],");
+
+                    if (dt.Columns.Contains("HideColumns") && HideColumns.Replace(",", "\",\"").Trim() != "")
+                        JsonString.Append("\"HideColumns\":[\"" + HideColumns.Replace(",", "\",\"") + "\"],");
+                    else
+                        JsonString.Append("\"HideColumns\":[],");
+                }
+                else
+                {
+                    if (dt.Columns.Contains("HideColumns") && HideColumns.Replace(",", "\",\"").Trim() != "")
+                        JsonString.Append("\"HideColumns\":[\"" + HideColumns.Replace(",", "\",\"") + "\"],");
+                }
+                JsonString.Append("\"Data\":[");
+
+                if (HeadersValue.Trim() != "")
+                {
+                    string[] arrValue = HeadersValue.Split(',');
+                    string[] arrImageHeaderValue = new string[] { };
+                    for (int i = 0; i < dt.Rows.Count; i++)
+                    {
+                        JsonString.Append("{");
+                        for (int j = 0; j < arrValue.Length; j++)
+                        {
+                            if (arrValue.Length - 1 == j)
+                            {
+                                
+                                    JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": \"" + dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim() + "\"");
+                                
+                            }
+                            else
+                            {
+                               JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": \"" + dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim().Replace("\n", " ") + "\",");
+                               
+                            }
+
+                        }
+                        if (ImageHeaderValue.Trim() != "")
+                        {
+                            arrImageHeaderValue = ImageHeaderValue.Split(',');
+                            JsonString.Append(",\"Object\": {");
+                            for (int k = 0; k < arrImageHeaderValue.Length; k++)
+                            {
+                                if (arrImageHeaderValue.Length - 1 == k)
+                                {
+
+                                    JsonString.Append("\"" + arrImageHeaderValue[k].ToString().Trim() + "\": \"" + dt.Rows[i][arrImageHeaderValue[k].ToString().Trim()].ToString().Trim() + "\"");
+
+                                }
+                                else
+                                {
+                                    JsonString.Append("\"" + arrImageHeaderValue[k].ToString().Trim() + "\": \"" + dt.Rows[i][arrImageHeaderValue[k].ToString().Trim()].ToString().Trim() + "\",");
+
+                                }
+                            }
+                            JsonString.Append("}");
+                        }
+
+                        if (dt.Rows.Count - 1 == i)
+                            JsonString.Append("}");
+                        else
+                            JsonString.Append("},");
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < dt.Rows.Count; i++)
+                    {
+                        JsonString.Append("{");
+                        for (int j = 0; j < dt.Columns.Count; j++)
+                        {
+                            if (dt.Columns.Count - 1 == j)
+                            {
+                                JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": \"" + dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim() + "\"");
+                            }
+
+                            else
+                            {
+                                JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": \"" + dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim() + "\",");
+                            }
+
+                        }
+                        if (dt.Rows.Count - 1 == i)
+                            JsonString.Append("}");
+                        else
+                            JsonString.Append("},");
+                    }
+                }
+
+                JsonString.Append("]}");
+            }
+            return JsonString;
+        }
+        public static StringBuilder CreateJsonForTable(DataTable dt, string Type = "", string ColumnToObject = "", string JsonColumnToObject = "", string AppendHeader = "", string AppendHeaderValueColumnName = "")
+        {
+            StringBuilder JsonString = new StringBuilder();
+            if (dt.Rows.Count > 0)
+            {
+                string HeadersKey = "";
+                string HeadersValue = "";
+                string Actions = "";
+                string HideColumns = "";
+                if (!dt.Columns.Contains("TotalRecord"))
+                {
+                    dt.Columns.Add("TotalRecord", typeof(string));
+                    dt.Rows[0]["TotalRecord"] = dt.Rows.Count.ToString();
+                }
+                if (!dt.Columns.Contains("PageSize"))
+                {
+                    dt.Columns.Add("PageSize", typeof(string));
+                    dt.Rows[0]["PageSize"] = "10000";
+                }
+
+                if (dt.Columns.Contains("HeadersKey"))
+                {
+                    foreach (string s in dt.Rows[0]["HeadersKey"].ToString().Split(','))
+                    {
+                        HeadersKey += s.Replace("\n", "").Replace("\t", "").Replace("\r", "").Trim() + ",";
+                    }
+                    HeadersKey = HeadersKey.TrimStart(',').TrimEnd(',');
+                }
+                if (dt.Columns.Contains("HeadersValue"))
+                {
+                    foreach (string s in dt.Rows[0]["HeadersValue"].ToString().Split(','))
+                    {
+                        HeadersValue += s.Replace("\n", "").Replace("\t", "").Replace("\r", "") + ",";
+                    }
+                    HeadersValue = HeadersValue.TrimStart(',').TrimEnd(',');
+                }
+
+                if (dt.Columns.Contains("Actions"))
+                {
+                    foreach (string s in dt.Rows[0]["Actions"].ToString().Split(','))
+                    {
+                        Actions += s.Replace("\n", "").Replace("\t", "").Replace("\r", "") + ",";
+                    }
+                    Actions = Actions.TrimStart(',').TrimEnd(',');
+                }
+
+                if (dt.Columns.Contains("HideColumns"))
+                {
+                    foreach (string s in dt.Rows[0]["HideColumns"].ToString().Split(','))
+                    {
+                        HideColumns += s.Replace("\n", "").Replace("\t", "").Replace("\r", "") + ",";
+                    }
+                    HideColumns = HideColumns.TrimStart(',').TrimEnd(',');
+
+                }
+
+                JsonString.Append("{");
+                JsonString.Append("\"Status\":\"@@Status\",");
+                JsonString.Append("\"Message\":\"@@Message\",");
+                JsonString.Append("\"Focus\":\"@@Focus\",");
+                if (AppendHeader.Trim() != "")
+                {
+                    string[] arrAppendHeader = AppendHeader.Split(',');
+                    string[] arrAppendHeaderValue = AppendHeaderValueColumnName.Split(',');
+                    for (int i = 0; i < arrAppendHeader.Length; i++)
+                    {
+                        JsonString.Append("\"" + arrAppendHeader[i] + "\":\"" + dt.Rows[0][arrAppendHeaderValue[i]] + "\",");
+                    }
+                }
+                if (Type.Trim().ToUpper() != "E")
+                {
+                    JsonString.Append("\"TotalRecord\":" + dt.Rows[0]["TotalRecord"].ToString() + ",");
+                    JsonString.Append("\"PageSize\":" + dt.Rows[0]["PageSize"].ToString() + ",");
+                }
+                if (HeadersValue.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"HeadersValue\":[\"" + HeadersValue.Replace(",", "\",\"") + "\"],");
+                else
+                    JsonString.Append("\"HeadersValue\":[],");
+                if (HeadersKey.Replace(",", "\",\"").Trim() != "")
+                    JsonString.Append("\"HeadersKey\":[\"" + HeadersKey.Replace(",", "\",\"") + "\"],");
+                else
+                    JsonString.Append("\"HeadersKey\":[],");
+
+                if (Type.Trim().ToUpper() != "E")
+                {
+                    if (dt.Columns.Contains("Actions") && Actions.Replace(",", "\",\"").Trim() != "")
+                        JsonString.Append("\"Actions\":[\"" + Actions.Replace(",", "\",\"") + "\"],");
+                    else
+                        JsonString.Append("\"Actions\":[],");
+
+                    if (dt.Columns.Contains("HideColumns") && HideColumns.Replace(",", "\",\"").Trim() != "")
+                        JsonString.Append("\"HideColumns\":[\"" + HideColumns.Replace(",", "\",\"") + "\"],");
+                    else
+                        JsonString.Append("\"HideColumns\":[],");
+                }
+                else
+                {
+                    if (dt.Columns.Contains("HideColumns") && HideColumns.Replace(",", "\",\"").Trim() != "")
+                        JsonString.Append("\"HideColumns\":[\"" + HideColumns.Replace(",", "\",\"") + "\"],");
+                }
+
+                JsonString.Append("\"Data\":[");
+                if (HeadersValue.Trim() != "")
+                {
+                    string[] arrValue = HeadersValue.Split(',');
+                    for (int i = 0; i < dt.Rows.Count; i++)
+                    {
+                        JsonString.Append("{");
+                        for (int j = 0; j < arrValue.Length; j++)
+                        {
+                            if (arrValue.Length - 1 == j)
+                            {
+                                if (Type.Trim().ToUpper() != "E")
+                                {
+                                    if (ColumnToObject.Split(',').Contains<string>(arrValue[j].ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": " + JsonConvert.SerializeObject(dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim().Split(',')) + "");
+                                    }
+                                    else if (JsonColumnToObject.Split(',').Contains<string>(arrValue[j].ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": " + JsonConvert.DeserializeObject(dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim()) + "");
+                                    }
+                                    else
+                                    {
+                                        JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": \"" + dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim() + "\"");
+                                    }
+                                }
+                                else
+                                {
+                                    JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": \"" + dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim() + "\"");
+                                }
+
+                            }
+                            else
+                            {
+                                if (Type.Trim().ToUpper() != "E")
+                                {
+                                    if (ColumnToObject.Split(',').Contains<string>(arrValue[j].ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": " + JsonConvert.SerializeObject(dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim().Split(',')) + ",");
+                                    }
+                                    else if (JsonColumnToObject.Split(',').Contains<string>(arrValue[j].ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": " + JsonConvert.DeserializeObject(dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim()) + ",");
+                                    }
+                                    else
+                                    {
+                                        JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": \"" + dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim() + "\",");
+                                    }
+                                }
+                                else
+                                {
+                                    JsonString.Append("\"" + arrValue[j].ToString().Trim() + "\": \"" + dt.Rows[i][arrValue[j].ToString().Trim()].ToString().Trim() + "\",");
+                                }
+                            }
+                        }
+                        if (dt.Rows.Count - 1 == i)
+                            JsonString.Append("}");
+                        else
+                            JsonString.Append("},");
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < dt.Rows.Count; i++)
+                    {
+                        JsonString.Append("{");
+                        for (int j = 0; j < dt.Columns.Count; j++)
+                        {
+                            if (dt.Columns.Count - 1 == j)
+                            {
+                                if (Type.Trim().ToUpper() != "E")
+                                {
+                                    if (ColumnToObject.Split(',').Contains<string>(dt.Columns[j].ColumnName.ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": " + JsonConvert.SerializeObject(dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim().Split(',')) + "");
+                                    }
+                                    else if (JsonColumnToObject.Split(',').Contains<string>(dt.Columns[j].ColumnName.ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": " + JsonConvert.DeserializeObject(dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim()) + "");
+                                    }
+                                    else
+                                    {
+                                        JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": \"" + dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim() + "\"");
+                                    }
+                                }
+                                else
+                                {
+                                    JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": \"" + dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim() + "\"");
+                                }
+
+                            }
+                            else
+                            {
+                                if (Type.Trim().ToUpper() != "E")
+                                {
+                                    if (ColumnToObject.Split(',').Contains<string>(dt.Columns[j].ColumnName.ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": " + JsonConvert.SerializeObject(dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim().Split(',')) + ",");
+                                    }
+                                    else if (JsonColumnToObject.Split(',').Contains<string>(dt.Columns[j].ColumnName.ToString().Trim()))
+                                    {
+                                        JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": " + JsonConvert.DeserializeObject(dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim()) + ",");
+                                    }
+                                    else
+                                    {
+                                        JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": \"" + dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim() + "\",");
+                                    }
+                                }
+                                else
+                                {
+                                    JsonString.Append("\"" + dt.Columns[j].ColumnName.ToString().Trim() + "\": \"" + dt.Rows[i][dt.Columns[j].ColumnName.ToString().Trim()].ToString().Trim() + "\",");
+                                }
+                            }
+                        }
+                        if (dt.Rows.Count - 1 == i)
+                            JsonString.Append("}");
+                        else
+                            JsonString.Append("},");
+                    }
+                }
+
+                JsonString.Append("]}");
+            }
+            return JsonString;
+        }
+        public static string ExpiredMsg
+        {
+            get
+            {
+                return "EXPIRED";
+            }
+        }
+        public static string UnauthorizedStatus
+        {
+            get
+            {
+                return "UNAUTHORIZED";
+            }
+        }
+        public static string UnauthorizedMsg
+        {
+            get
+            {
+                return "You do not have permission of this operation.!";
+            }
+        }
+        public static string Success
+        {
+            get
+            {
+                return "SUCCESS";
+            }
+        }
+        public static string Error
+        {
+            get
+            {
+                return "ERROR";
+            }
+        }
+        public static string RecordFetchedMsg
+        {
+            get
+            {
+                return "Record fetched successfully";
+            }
+        }
+        public static string NoRecordMsg
+        {
+            get
+            {
+                return "No Record Found";
+            }
+        }
+        public static IConfiguration Configuration
+        {
+            get
+            {
+                var builder = new ConfigurationBuilder()
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile($"appsettings.json", true, true)
+                .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}.json", optional: true, reloadOnChange: true);
+                config = builder.Build();
+                return config;
+            }
+        }
+        public static string GetConfiguration(string SectionName, string KeyName)
+        {
+
+            if (SectionName.Trim() != "" && KeyName.Trim() != "")
+            {
+                return Configuration.GetSection($"{SectionName}:{KeyName}").Value;
+            }
+            else if (SectionName.Trim() != "")
+            {
+                return Configuration.GetSection(SectionName).Value;
+            }
+            else
+            {
+                return "";
+            }
+        }
+        public static bool IsUserRight(string UserCode, string MenuName, string OPType)
+        {
+
+            if (String.IsNullOrWhiteSpace(UserCode) || String.IsNullOrWhiteSpace(MenuName))
+            {
+                return false;
+            }
+            string[,] Param = new string[,]{
+            {"@UserCode",UserCode.Trim()},
+            {"@PageName",MenuName.Trim()},
+            //{"@IPAddress",Helper.GetIPAddress()},
+            {"@OPType",OPType.Trim()}
+            };
+            string Res = CommonMethod.SIPLDB.ExecuteProcedureReturnString(Param, "USP_GetUserPageAccessRight");
+            if (Res.Trim().ToUpper() == "YES" || Res.Trim().ToUpper() == "1")
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+        public static bool IsExpired(string UserID, string SessionID)
+        {
+            bool result = true;
+            string[,] Param = new string[,]{
+            {"@UserID",UserID==null?"":UserID.Trim() },
+            {"@SessionID",SessionID==null?"":SessionID.Trim() }
+            };
+            DataTable dt = CommonMethod.SIPLDB.FillDataInDT(Param, "USP_CheckSession");
+            if (dt.Rows.Count > 0)
+            {
+                result = false;
+            }
+            return result;
+        }
+        public static string GetControllerActionName(ControllerContext ctrl)
+        {
+            return $"{ctrl.ActionDescriptor.ControllerName}  : {ctrl.ActionDescriptor.ActionName}";
+        }
+        public static DataTable CreateDataListToTable<T>(IEnumerable<T> list, DataTable dataTable)
+        {
+            Type type = typeof(T);
+            var properties = type.GetProperties();
+            if (dataTable.Rows.Count < 1)
+            {
+                foreach (PropertyInfo info in properties)
+                {
+                    dataTable.Columns.Add(new DataColumn(info.Name, Nullable.GetUnderlyingType(info.PropertyType) ?? info.PropertyType));
+                }
+            }
+
+            foreach (T entity in list)
+            {
+                object[] values = new object[properties.Length];
+                for (int i = 0; i < properties.Length; i++)
+                {
+                    values[i] = properties[i].GetValue(entity) == null ? "" : properties[i].GetValue(entity);
+                }
+
+                dataTable.Rows.Add(values);
+            }
+
+
+            return (dataTable);
+        }
+        public static string GetParamKeyValue(string[,] ArrayParameter)
+        {
+            string result = "";
+            for (int index = 0; index <= ArrayParameter.GetUpperBound(0); ++index)
+            {
+                if (ArrayParameter[index, 0].ToString().Contains("@"))
+                {
+                    result += ArrayParameter[index, 0].ToString() + "='" + ArrayParameter[index, 1].ToString() + "'," + Environment.NewLine;
+                }
+                else
+                {
+                    result += "@" + ArrayParameter[index, 0].ToString() + "='" + ArrayParameter[index, 1].ToString() + "'," + Environment.NewLine;
+                }
+            }
+            return result;
+        }
+        public static void SaveImageInTheFolder(string ImageName, string FolderPath, string ImageBase64)
+        {
+            string FullPath = Path.GetFullPath("wwwroot\\ClientApp\\public\\WebImage") + FolderPath;
+            if (!Directory.Exists(FullPath))
+            {
+                Directory.CreateDirectory(FullPath);
+            }
+            byte[] imageBytes = Convert.FromBase64String(ImageBase64);
+            string filePath = Path.Combine(FullPath, ImageName);
+            File.WriteAllBytes(filePath, imageBytes);
+        }
+        public static void DeleteImageFromFolder(string ImageName, string FolderPath)
+        {
+            string FullPath = Path.GetFullPath("wwwroot\\ClientApp\\public\\WebImage") + FolderPath + "\\" + ImageName;
+            FileInfo fi = new FileInfo(FullPath);
+            if (fi.Exists)
+                fi.Delete();
+        }
+        public static string GetImageBase64String(string ImageName, string FolderPath)
+        {
+            string FullPath = Path.GetFullPath("wwwroot\\ClientApp\\public\\WebImage") + FolderPath + "\\" + ImageName;
+            string Base64String = "";
+            if (File.Exists(FullPath))
+            {
+                byte[] imageBytes = System.IO.File.ReadAllBytes(FullPath);
+                Base64String = Convert.ToBase64String(imageBytes);
+            }
+            return Base64String;
+        }
+        public static string UppercaseFirst(string s)
+        {
+            string inString = s;
+            TextInfo cultInfo = new CultureInfo("en-US", false).TextInfo;
+            return cultInfo.ToTitleCase(inString);
+        }
+        public static int GenerateOTP()
+        {
+            int _min = 100000;
+            int _max = 999999;
+            Random _rdm = new Random();
+            return _rdm.Next(_min, _max);
+        }
+        public static Dictionary<string, string> SendSMS(string MobileNo, int OTP)
+        {
+            Dictionary<string, string> Dic = new Dictionary<string, string>();
+            Dic["Result"] = "";
+            StringBuilder jsonRequest = new StringBuilder();
+            var JSONResponse = "";
+            try
+            {
+                string APIkey = CommonMethod.GetConfiguration("AppSetting", "SMSAPIkey");
+                string SenderId = CommonMethod.GetConfiguration("AppSetting", "SenderId");
+                string URL = CommonMethod.GetConfiguration("AppSetting", "SMSURL");
+                string DLTTemplateId = CommonMethod.GetConfiguration("AppSetting", "DLTTemplateId");
+                if (MobileNo != "" && OTP.ToString() != "")
+                {
+                    jsonRequest.Append("{\n");
+                    jsonRequest.Append("\"Account\": {\n");
+                    jsonRequest.Append("\"APIkey\": \"" + APIkey + "\",\n");
+                    jsonRequest.Append("\"SenderId\": \"" + SenderId + "\",\n");
+                    jsonRequest.Append("\"Channel\": \"2\",\n");
+                    jsonRequest.Append("\"DCS\": \"0\"\n");
+                    jsonRequest.Append("},\n");
+                    jsonRequest.Append("\"Messages\": [\n");
+                    jsonRequest.Append("{\n");
+                    jsonRequest.Append("\"Text\": \"Dear User,\nYour One Time Password (OTP) for Login is " + OTP + " Regards, SIPL_ShoppingCart.\",\n");
+                    jsonRequest.Append("\"DLTTemplateId\": \"" + DLTTemplateId + "\",\n");
+                    jsonRequest.Append("\"Number\": \"" + MobileNo + "\"\n");
+                    jsonRequest.Append("}\n");
+                    jsonRequest.Append("]\n");
+                    jsonRequest.Append("}\n");
+
+                    ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+                    JSONResponse = CommonMethod.SIPLGF.CallWebServicePost(URL, jsonRequest.ToString(), "application/json");
+                    SendSMSResponse.Rootobject JsonResponse = new SendSMSResponse.Rootobject();
+                    JsonResponse = JsonConvert.DeserializeObject<SendSMSResponse.Rootobject>(JSONResponse);
+                    if (JsonResponse != null)
+                    {
+                        if (JsonResponse.ErrorCode == "000")
+                        {
+                            Dic["Result"] = "SUCCESS";
+                        }
+                        else
+                        {
+                            Dic["Result"] = JsonResponse.ErrorMessage;
+                        }
+                    }
+                }
+                else
+                {
+                    Dic["Result"] = "ERROR";
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Dic["Result"] = ex.Message;
+                InsertApiLog(jsonRequest.ToString(), JSONResponse.ToString(), "", "SendSMS", "");
+            }
+            return Dic;
+        }
+        public static bool IsValidGST(string GSTNo)
+        {
+            Regex regex = new Regex(@"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$");
+            Match match = regex.Match(GSTNo);
+            if (match.Success)
+                return true;
+            else
+                return false;
+        }
+        public static bool ValidatePanGST(string GSTNo, string PanNo)
+        {
+            string GST = GSTNo.Substring(2, 10);
+            if (GST == PanNo)
+                return true;
+            else
+                return false;
+        }
+        public static bool IsValidEmail(string EMailAddress)
+        {
+            Regex regex = new Regex(@"^([\w\.\-]+)@([\w\-]+)((\.(\w){2,3})+)$");
+            Match match = regex.Match(EMailAddress);
+            if (match.Success)
+                return true;
+            else
+                return false;
+        }
+        public static string GenerateImageName()
+        {
+            string ImageName = "";
+            ImageName = SIPLGF.GetRandomNumber(20);
+            return ImageName;
+        }
+        public static string GetImagePath(string ImageName, string FolderPath)
+        {
+            string ImagePath = "";
+            ImagePath = Path.GetFullPath("wwwroot") + "\\ClientApp\\public\\WebImage" + FolderPath + "\\" + ImageName;
+            if (!File.Exists(ImagePath))
+            {
+                ImagePath = "";
+            }
+            return ImagePath;
+        }
+        public static string SendMail(MailMessage mm, string EmailFrom, string EmailTo, string EmailCC, string EmailBCC, string MailSubject, string MailBody, string host, int port, string EMail, string Password, bool secure)
+        {
+            string Error = "";
+            try
+            {
+                //MailMessage mm = new MailMessage();
+                MailAddress From = new MailAddress(EmailFrom);
+                mm.From = From;
+                if (EmailTo.Trim() != "")
+                {
+                    string[] MailTo = EmailTo.Split(',');
+                    foreach (string Mail in MailTo)
+                    {
+                        mm.To.Add(Mail);
+                    }
+                }
+                if (EmailCC.Trim() != "")
+                {
+                    string[] CCMail = EmailCC.Split(',');
+                    foreach (string MailCC in CCMail)
+                    {
+                        mm.CC.Add(MailCC);
+                    }
+                }
+                if (EmailBCC.Trim() != "")
+                {
+                    string[] BCC = EmailBCC.Split(',');
+                    foreach (string MailBCC in BCC)
+                    {
+                        mm.Bcc.Add(MailBCC);
+                    }
+                }
+                mm.Subject = MailSubject;
+                mm.Body = MailBody;
+                mm.IsBodyHtml = true;
+
+                SmtpClient smtp = new SmtpClient();
+                smtp.Port = port;
+                smtp.Host = host;
+                smtp.EnableSsl = secure;
+                smtp.UseDefaultCredentials = false;
+                smtp.Credentials = new NetworkCredential(EMail, Password);
+                smtp.DeliveryMethod = SmtpDeliveryMethod.Network;
+
+                smtp.Send(mm);
+                Error = "";
+            }
+            catch (Exception ex)
+            {
+                Error = ex.Message;
+                if (ex.InnerException != null)
+                {
+                    Error = "; Inner Exception: " + ex.InnerException;
+                }
+            }
+            return Error;
+        }
+
+        public static string SendSMSOTP(string MobileNo, int OTP, string SMSType, string IPAddress, string OrderNo = "", string CustomerName = "")
+        {
+            string Result = "", SMSUrl = "", Senderid = "", TextSMS = "", EntityID = "", TemplateID = "", URL = "", Status = "", jobId = "", ServiceProvider = "";
+            StringBuilder jsonRequest = new StringBuilder();
+            DataTable dt = new DataTable();
+            var JSONResponse = ""; var ObjResponse = "";
+            try
+            {
+                if (MobileNo != "" && OTP.ToString() != "")
+                {
+                    string[,] Param = new string[,]
+                    {
+                        {"@SMSType",SMSType.Trim()},
+                    };
+                    dt = SIPLDB.FillDataInDT(Param, "USP_GetSMSCredentials");
+                    if (dt.Rows.Count > 0)
+                    {
+                        SMSUrl = dt.Rows[0]["SMSUrl"].ToString();
+                        ServiceProvider = dt.Rows[0]["ServiceProvider"].ToString();
+                        Senderid = dt.Rows[0]["SenderID"].ToString();
+                        TextSMS = dt.Rows[0]["SMSText"].ToString();
+                        EntityID = dt.Rows[0]["EntityID"].ToString();
+                        TemplateID = dt.Rows[0]["TemplateID"].ToString();
+
+                        if (SMSUrl != "")
+                        {
+                            if (TextSMS.Contains("@@OTP"))
+                            {
+                                TextSMS = TextSMS.Replace("@@OTP", OTP.ToString());
+                            }
+                            if (TextSMS.Contains("@@OrderNo"))
+                            {
+                                TextSMS = TextSMS.Replace("@@OrderNo", OrderNo.ToString());
+                            }
+                            if (TextSMS.Contains("@@CustomerName"))
+                            {
+                                TextSMS = TextSMS.Replace("@@CustomerName", CustomerName.ToString());
+                            }
+                            if (SMSUrl.Contains("[Senderid]"))
+                            {
+                                SMSUrl = SMSUrl.Replace("[Senderid]", Senderid.Trim());
+                            }
+                            if (SMSUrl.Contains("[MobileNumber]"))
+                            {
+                                SMSUrl = SMSUrl.Replace("[MobileNumber]", MobileNo.Trim());
+                            }
+                            if (SMSUrl.Contains("[TextSMS]"))
+                            {
+                                SMSUrl = SMSUrl.Replace("[TextSMS]", TextSMS);
+                            }
+                            if (SMSUrl.Contains("[EntityID]"))
+                            {
+                                SMSUrl = SMSUrl.Replace("[EntityID]", EntityID.Trim());
+                            }
+                            if (SMSUrl.Contains("[TemplateID]"))
+                            {
+                                SMSUrl = SMSUrl.Replace("[TemplateID]", TemplateID.Trim());
+                            }
+                            URL = SMSUrl.ToString();
+                        }
+
+                        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+                        ObjResponse = CommonMethod.SIPLGF.CallWebServiceGet(URL);
+                        SendSMSOTPResponse.Rootobject JsonResponse = new SendSMSOTPResponse.Rootobject();
+                        JsonResponse = JsonConvert.DeserializeObject<SendSMSOTPResponse.Rootobject>(ObjResponse);
+                        if (JsonResponse != null)
+                        {
+                            if (JsonResponse.code == "000")
+                            {
+                                Result = "SUCCESS";
+                                string[,] ParamSMS = new string[,]
+                                {
+                                    {"@SMSType",SMSType.Trim()},
+                                    {"@MobileNo",MobileNo.Trim()},
+                                    {"@TextSMS",TextSMS.Trim()},
+                                    {"@TemplateID",TemplateID.Trim()},
+                                    {"@Senderid",Senderid.Trim()},
+                                    {"@ServiceProvider",ServiceProvider.Trim()},
+                                    {"@IsSend","1"},
+                                    {"@Message",String.IsNullOrWhiteSpace(JsonResponse.message.ToString()) ? "" : JsonResponse.message.ToString()},
+                                    {"@JobId",String.IsNullOrWhiteSpace(JsonResponse.jobId.ToString()) ? "" : JsonResponse.jobId.ToString()},
+                                    {"@Status","SUCCESS"},
+                                    {"@RequestString",URL.ToString()},
+                                    {"@ResponseString",ObjResponse.ToString()},
+                                    {"@IPAddress",IPAddress.Trim()},
+                                };
+                                dt = SIPLDB.FillDataInDT(ParamSMS, "USP_SaveSMSOTPLog");
+                            }
+                            else
+                            {
+                                Result = JsonResponse.message;
+                                string[,] ParamSMS = new string[,]
+                                   {
+                                        {"@SMSType",SMSType.Trim()},
+                                        {"@MobileNo",MobileNo.Trim()},
+                                        {"@TextSMS",TextSMS.Trim()},
+                                        {"@TemplateID",TemplateID.Trim()},
+                                        {"@Senderid",Senderid.Trim()},
+                                        {"@ServiceProvider",ServiceProvider.Trim()},
+                                        {"@IsSend","0"},
+                                        {"@Message",String.IsNullOrWhiteSpace(JsonResponse.message.ToString()) ? "" : JsonResponse.message.ToString()},
+                                        {"@JobId",String.IsNullOrWhiteSpace(JsonResponse.jobId.ToString()) ? "" : JsonResponse.jobId.ToString()},
+                                        {"@Status","ERROR"},
+                                        {"@RequestString",URL.ToString()},
+                                        {"@ResponseString",ObjResponse.ToString()},
+                                        {"@IPAddress",IPAddress.Trim()},
+                                   };
+                                dt = SIPLDB.FillDataInDT(ParamSMS, "USP_SaveSMSOTPLog");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Result = "ERROR";
+                    }
+                }
+                else
+                {
+                    Result = "ERROR";
+                }
+            }
+            catch (Exception ex)
+            {
+                Result = ex.Message;
+                InsertApiLog(URL.ToString(), ObjResponse.ToString(), "", "SendSMSOTP", "");
+            }
+            return Result;
+        }
+
+        public static string PrintRDLC(DataTable dtPrint, string RDLCName, string DatasetName)
+        {
+            string Base64PDF = "";
+            if (dtPrint.Rows.Count > 0)
+            {
+                LocalReport rep = new LocalReport();
+                rep.DataSources.Clear();
+                rep.Refresh();
+                ReportDataSource ds = new ReportDataSource();
+                rep.ReportPath = "RDLC/" + RDLCName;
+                ds.Name = DatasetName;
+                ds.Value = dtPrint;
+                rep.DataSources.Add(ds);
+                Warning[] warnings = null;
+                string[] streamids = null;
+                string mimeType = string.Empty;
+                string encoding = string.Empty;
+                string extension = string.Empty;
+                byte[] bytes = rep.Render("PDF", null, out mimeType, out encoding, out extension, out streamids, out warnings);
+                Base64PDF = Convert.ToBase64String(bytes);
+               // Base64PDF = "data:application/pdf;base64," + Base64PDF;
+            }
+            return Base64PDF;
+        }
+    }
+}
+public static class HttpContextExtensions
+{
+    public static IPAddress GetIPAddress(this HttpContext context, bool allowForwarded = true)
+    {
+        if (allowForwarded)
+        {
+            string header = (context.Request.Headers["CF-Connecting-IP"].FirstOrDefault() ?? context.Request.Headers["X-Forwarded-For"].FirstOrDefault());
+            if (IPAddress.TryParse(header, out IPAddress ip))
+            {
+                return ip;
+            }
+        }
+        return context.Connection.RemoteIpAddress;
+    }
+}
+
+public class CommonRequest
+{
+    public string? Token { get; set; } = "";
+    public string? LoginUserCode { get; set; } = "";
+    public string? Source { get; set; } = "WEB";
+    public string? LoginType { get; set; } = "";
+}
+public class CommonMasterShowExRequest : CommonRequest
+{
+    public string? PageIndex { get; set; }
+    public string? Type { get; set; }
+    public string? SearchText { get; set; }
+    public string? SearchFieldValue { get; set; }
+    public string? StartValue { get; set; }
+    public string? PageSize { get; set; } = "20";
+    public string? SortColumn { get; set; } = "";
+    public string? SortOrder { get; set; } = "";
+    public string? Vendor { get; set; } = "";
+    public string? TabType { get; set; } = "";
+    public List<SearchCriteria>? AdvanceFilter { get; set; }
+    public class SearchCriteria
+    {
+        public string? SearchingText { get; set; }
+        public string? SearchingText1 { get; set; }
+        public string? SearchingValue { get; set; }
+        public string? ComparisonType { get; set; }
+    }
+}
+public class CommonResponse
+{
+    public string? Status { get; set; }
+    public string? Message { get; set; } = "";
+    public string? Focus { get; set; } = "";
+    public string? ProductPreviewUrl { get; set; } = "";
+}
+public class CommonPrintResponse : CommonResponse
+{
+    public string? DocumentPdfBase64 { get; set; }
+}
+
+public class SendSMSResponse
+{
+    public class Rootobject
+    {
+        public string ErrorCode { get; set; }
+        public string ErrorMessage { get; set; }
+        public string JobId { get; set; }
+        public List<MessageData> MessageData { get; set; }
+    }
+
+    public class MessageData
+    {
+        public string Number { get; set; }
+        public string MessageId { get; set; }
+        public string Message { get; set; }
+    }
+}
+
+public class SendSMSOTPResponse
+{
+    public class Rootobject
+    {
+        public string code { get; set; }
+        public string message { get; set; }
+        public string jobId { get; set; }
+        public Messagedata[] MessageData { get; set; }
+    }
+
+    public class Messagedata
+    {
+        public string Number { get; set; }
+        public string Status { get; set; }
+    }
+
+
+}
+
+-------------------------
+
+
+  #region PinCodeMaster
+
+  [HttpPost]
+  [Route("InsertUpdatePinCodeMaster")]
+  public IActionResult InsertUpdatePinCodeMaster(InsertUpdatePinCodeMasterRequest Request)
+  {
+      CommonResponse Info = new CommonResponse();
+      string IPAddress = "";
+      try
+      {
+          IPAddress = HttpContext.GetIPAddress().ToString();
+          Info.Status = CommonMethod.Error;
+          Info.Message = "";
+          Info.Focus = "";
+          if (Request != null)
+          {
+              if (string.IsNullOrWhiteSpace(Request.Token)) Request.Token = "";
+              if (string.IsNullOrWhiteSpace(Request.LoginUserCode)) Request.LoginUserCode = "";
+              if (string.IsNullOrWhiteSpace(Request.PinCodeID)) Request.PinCodeID = "0";
+              if (string.IsNullOrWhiteSpace(Request.Area)) Request.Area = "";
+              if (string.IsNullOrWhiteSpace(Request.CountryCode)) Request.CountryCode = "";
+              if (string.IsNullOrWhiteSpace(Request.StateCode)) Request.StateCode = "";
+              if (string.IsNullOrWhiteSpace(Request.Area)) Request.Area = "";
+              if (string.IsNullOrWhiteSpace(Request.PinCode)) Request.PinCode = "";
+          }
+          if (Request == null)
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "4");
+          }
+          else if (Request.Token.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("Token", "3");
+          }
+          else if (Request.LoginUserCode.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "11");
+          }
+          else if (!CommonMethod.GetClientLoginToken(Request.Token, Request.LoginUserCode))
+          {
+              Info.Message = CommonMethod.ExpiredMsg;
+              Info.Status = CommonMethod.ExpiredMsg;
+          }
+          else if (!CommonMethod.CheckUserRights(Request.LoginUserCode.Trim(), "PinCodeMaster", "INS"))
+          {
+              Info.Message = CommonMethod.UnauthorizedMsg;
+              Info.Status = CommonMethod.UnauthorizedStatus;
+          }
+          else if (Request.Area.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("Area/City", "3");
+              Info.Focus = "txtArea";
+          }
+          else if (Request.CountryCode.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("Country", "1");
+              Info.Focus = "txtCountry";
+          }
+          else if (Request.StateCode.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("State", "1");
+              Info.Focus = "txtState";
+          }
+          else if (Request.PinCode.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("Pin Code", "3");
+              Info.Focus = "txtPinCode";
+          }
+          else if (Request.PinCode.Trim().Length < 6)
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("Pin Code", "2");
+              Info.Focus = "txtPinCode";
+          }
+          else
+          {
+              string[,] Param = new string[,]
+              {
+                 {"@PinCodeID",CommonMethod.SIPLGF.IsNumeric(Request.PinCodeID)?Request.PinCodeID.Trim():"0"},
+                 {"@Area",Request.Area.Trim()},
+                 {"@PinCode",Request.PinCode.Trim()},
+                 {"@CountryCode",Request.CountryCode.Trim()},
+                 {"@StateCode", CommonMethod.SIPLGF.getDelimitedValueFromString(Request.StateCode,":",1).Trim() },
+                 {"@IsActive",Request.IsActive ? "1" : "0" },
+                 {"@CreatedBy",Request.LoginUserCode.Trim()},
+                 {"@IPAddress",IPAddress.Trim()},
+                 {"@IsNotServiceable",Request.IsNotServiceable ? "1" : "0" },
+              };
+              DataTable dt = CommonMethod.SIPLDB.FillDataInDT(Param, "USP_InsertUpdatePinCodeMaster");
+              if (dt.Rows.Count > 0)
+              {
+                  Info.Status = dt.Rows[0]["Status"].ToString();
+                  Info.Message = dt.Rows[0]["Result"].ToString();
+                  Info.Focus = dt.Rows[0]["Focus"].ToString();
+              }
+          }
+      }
+      catch (Exception ex)
+      {
+          Info.Status = CommonMethod.Error;
+          Info.Message = ex.Message;
+          CommonMethod.InsertApiLog(CommonMethod.GetJSONFromObject(Request), ex.Message, IPAddress.Trim()
+          , CommonMethod.GetControllerActionName(this.ControllerContext), Request.LoginUserCode.Trim());
+      }
+      return Ok(Info);
+  }
+
+  [HttpPost]
+  [Route("ShowPinCodeMaster")]
+  public IActionResult ShowPinCodeMaster(CommonMasterShowExRequest Request)
+  {
+      StringBuilder JsonString = new StringBuilder();
+      string Status = "ERROR";
+      string Message = "";
+      string IPAddress = "";
+      try
+      {
+          IPAddress = HttpContext.GetIPAddress().ToString();
+          JsonString.Append("{");
+          JsonString.Append("\"Status\":\"@@Status\",");
+          JsonString.Append("\"Message\":\"@@Message\"");
+          JsonString.Append("}");
+          if (Request != null)
+          {
+              if (string.IsNullOrWhiteSpace(Request.Token)) Request.Token = "";
+              if (string.IsNullOrWhiteSpace(Request.LoginUserCode)) Request.LoginUserCode = "0";
+              if (string.IsNullOrWhiteSpace(Request.PageIndex)) Request.PageIndex = "1";
+              if (string.IsNullOrWhiteSpace(Request.Type)) Request.Type = "S";
+              if (string.IsNullOrWhiteSpace(Request.PageSize)) Request.PageSize = "10";
+              if (string.IsNullOrWhiteSpace(Request.SortColumn)) Request.SortColumn = "";
+              if (string.IsNullOrWhiteSpace(Request.SortOrder)) Request.SortOrder = "";
+          }
+          IPAddress = HttpContext.GetIPAddress().ToString();
+          string _Token = CommonMethod.GetConfiguration("Tokens", "AuthToken");
+
+          if (Request == null)
+          {
+              Message = CommonMethod.PleaseEnterValidateMessage("", "4");
+          }
+          else if (Request.Token.Trim() == "")
+          {
+              Message = CommonMethod.PleaseEnterValidateMessage("", "10");
+          }
+          else if (Request.LoginUserCode.Trim() == "" || Request.LoginUserCode.Trim() == "0")
+          {
+              Message = CommonMethod.PleaseEnterValidateMessage("", "11");
+          }
+          else if (CommonMethod.IsExpired(Request.LoginUserCode.Trim(), Request.Token.Trim()))
+          {
+              Status = CommonMethod.ExpiredMsg;
+              Message = CommonMethod.ExpiredMsg;
+          }
+          else if (Request.Type.Trim().ToUpper() != "S" && !CommonMethod.IsUserRight(Request.LoginUserCode.Trim(), "PinCodeMaster", "Export"))
+          {
+              Status = CommonMethod.UnauthorizedStatus;
+              Message = CommonMethod.UnauthorizedMsg;
+          }
+          else if (!CommonMethod.IsUserRight(Request.LoginUserCode.Trim(), "PinCodeMaster", "View"))
+          {
+              Status = CommonMethod.UnauthorizedStatus;
+              Message = CommonMethod.UnauthorizedMsg;
+          }
+          else
+          {
+              string[,] Param = new string[,]
+              {
+                  {"@PinCodeID","0"},
+                  {"@PageIndex",Request.PageIndex.Trim()},
+                  {"@Type",Request.Type.Trim()},
+                  {"@PageSize",CommonMethod.SIPLGF.IsNumeric(Request.PageSize)?Request.PageSize.Trim():"10"},
+                  {"@SortColumn",Request.SortColumn.Trim()},
+                  {"@SortOrder",Request.SortOrder.Trim()},
+                  {"@AdvanceFilter",(Request.AdvanceFilter==null?"":JsonConvert.SerializeObject(Request.AdvanceFilter))},
+              };
+              string p = CommonMethod.GetParamKeyValue(Param);
+              DataTable dt = CommonMethod.SIPLDB.FillDataInDT(Param, "USP_ShowExPinCodeMaster");
+              if (dt.Rows.Count > 0)
+              {
+                  Status = CommonMethod.Success;
+                  Message = dt.Rows[0]["Msg"].ToString();
+                  JsonString = CommonMethod.CreateJsonForTable(dt, Request.Type);
+              }
+              else
+              {
+                  Message = CommonMethod.NoRecordMsg;
+                  Status = CommonMethod.Error;
+              }
+          }
+      }
+      catch (Exception ex)
+      {
+          Status = CommonMethod.Error;
+          Message = ex.Message;
+          CommonMethod.InsertApiLog(CommonMethod.GetJSONFromObject(Request)
+             , ex.Message, IPAddress.Trim()
+             , CommonMethod.GetControllerActionName(this.ControllerContext)
+             , Request.LoginUserCode.ToString());
+      }
+      JsonString.Replace("@@Status", Status);
+      JsonString.Replace("@@Message", Message);
+      return this.Content(JsonString.ToString(), "application/json");
+  }
+
+  [HttpPost]
+  [Route("EditPinCodeMaster")]
+  public IActionResult EditPinCodeMaster(EditOrDeletePinCodeMasterRequest Request)
+  {
+      EditPinCodeMasterResponse Info = new EditPinCodeMasterResponse();
+      string IPAddress = "";
+      try
+      {
+          IPAddress = HttpContext.GetIPAddress().ToString();
+          Info.Status = "ERROR";
+          Info.Message = "";
+          if (Request != null)
+          {
+              if (string.IsNullOrWhiteSpace(Request.Token)) Request.Token = "";
+              if (string.IsNullOrWhiteSpace(Request.LoginUserCode)) Request.LoginUserCode = "";
+              if (string.IsNullOrWhiteSpace(Request.PinCodeID)) Request.PinCodeID = "0";
+          }
+          string _Token = CommonMethod.GetConfiguration("Tokens", "AuthToken");
+          if (Request == null)
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "4");
+          }
+          else if (Request.Token.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("AuthToken", "10");
+          }
+          else if (Request.LoginUserCode.Trim() == "" || Request.LoginUserCode.Trim() == "0")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "11");
+          }
+          else if (CommonMethod.IsExpired(Request.LoginUserCode.Trim(), Request.Token.Trim()))
+          {
+              Info.Status = CommonMethod.ExpiredMsg;
+              Info.Message = CommonMethod.ExpiredMsg;
+          }
+          else if (!CommonMethod.IsUserRight(Request.LoginUserCode.Trim(), "PinCodeMaster", "Edit"))
+          {
+              Info.Status = CommonMethod.UnauthorizedStatus;
+              Info.Message = CommonMethod.UnauthorizedMsg;
+          }
+          else
+          {
+              string[,] Param = new string[,]
+              {
+                  {"@PinCodeID",CommonMethod.SIPLGF.IsNumeric(Request.PinCodeID)?Request.PinCodeID.Trim():"0"}
+              };
+              DataTable dt = CommonMethod.SIPLDB.FillDataInDT(Param, "USP_ShowExPinCodeMaster");
+              if (dt.Rows.Count > 0)
+              {
+                  Info.Message = CommonMethod.RecordFetchedMsg;
+                  Info.Status = CommonMethod.Success;
+                  Info.PinCodeID = dt.Rows[0]["PinCodeID"].ToString();
+                  Info.Area = dt.Rows[0]["Area"].ToString();
+                  Info.StateCode = dt.Rows[0]["StateCode"].ToString();
+                  Info.CountryCode = dt.Rows[0]["CountryCode"].ToString();
+                  Info.PinCode = dt.Rows[0]["PinCode"].ToString();
+                  Info.IsActive = (dt.Rows[0]["Active"].ToString().ToString().ToUpper() == "YES") ? true : false;
+                  Info.IsNotServiceable = (dt.Rows[0]["NotServiceable"].ToString().ToString().ToUpper() == "YES") ? true : false;
+              }
+              else
+              {
+                  Info.Status = CommonMethod.Error;
+                  Info.Message = CommonMethod.NoRecordMsg;
+              }
+          }
+      }
+      catch (Exception ex)
+      {
+          Info.Status = "ERROR";
+          Info.Message = ex.Message;
+          CommonMethod.InsertApiLog(CommonMethod.GetJSONFromObject(Request), ex.Message, IPAddress.Trim(), CommonMethod.GetControllerActionName(this.ControllerContext), Request.LoginUserCode);
+      }
+      return Ok(Info);
+  }
+
+  [HttpPost]
+  [Route("DeletePinCodeMaster")]
+  public IActionResult DeletePinCodeMaster(EditOrDeletePinCodeMasterRequest Request)
+  {
+      CommonResponse Info = new CommonResponse();
+      string IPAddress = "";
+      try
+      {
+          IPAddress = HttpContext.GetIPAddress().ToString();
+          Info.Status = "ERROR";
+          Info.Message = "";
+          if (Request != null)
+          {
+              if (string.IsNullOrWhiteSpace(Request.Token)) Request.Token = "";
+              if (string.IsNullOrWhiteSpace(Request.LoginUserCode)) Request.LoginUserCode = "";
+              if (string.IsNullOrWhiteSpace(Request.PinCodeID)) Request.PinCodeID = "0";
+          }
+          string _AuthToken = CommonMethod.GetConfiguration("Tokens", "AuthToken");
+          if (Request == null)
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "4");
+          }
+          else if (Request.Token.Trim() == "")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "10");
+          }
+          else if (Request.LoginUserCode.Trim() == "" || Request.LoginUserCode.Trim() == "0")
+          {
+              Info.Message = CommonMethod.PleaseEnterValidateMessage("", "11");
+          }
+          else if (CommonMethod.IsExpired(Request.LoginUserCode.Trim(), Request.Token.Trim()))
+          {
+              Info.Status = CommonMethod.ExpiredMsg;
+              Info.Message = CommonMethod.ExpiredMsg;
+          }
+          else if (!CommonMethod.IsUserRight(Request.LoginUserCode.Trim(), "PinCodeMaster", "Del"))
+          {
+              Info.Status = CommonMethod.UnauthorizedStatus;
+              Info.Message = CommonMethod.UnauthorizedMsg;
+          }
+          else
+          {
+              string[,] Param = new string[,]
+              {
+                 {"@PinCodeID",CommonMethod.SIPLGF.IsNumeric(Request.PinCodeID)?Request.PinCodeID.Trim():"0"},
+                 {"@CreatedBy",Request.LoginUserCode.Trim()},
+                 {"@IPAddress",IPAddress.Trim()},
+              };
+              DataTable dt = CommonMethod.SIPLDB.FillDataInDT(Param, "USP_DeletePinCodeMaster");
+              if (dt.Rows.Count > 0)
+              {
+                  Info.Status = dt.Rows[0]["Status"].ToString();
+                  Info.Message = dt.Rows[0]["Msg"].ToString();
+              }
+          }
+      }
+      catch (Exception ex)
+      {
+          Info.Status = CommonMethod.Error;
+          Info.Message = ex.Message;
+          CommonMethod.InsertApiLog(CommonMethod.GetJSONFromObject(Request)
+             , ex.Message, IPAddress.Trim()
+             , CommonMethod.GetControllerActionName(this.ControllerContext), Request.LoginUserCode.ToString());
+      }
+      return Ok(Info);
+  }
+
+  #endregion PinCodeMaster
+
+
+
+------------------------
+public class DatabaseFunction
+{
+    private delegate void executeProceduresWithoutResultDelegate(Hashtable HashParameter, string ProcedureName);
+
+    public bool IsNVarchar = false;
+
+    public string DBConnectionString { get; set; }
+
+    public int DBCommandTimeout { get; set; }
+
+    public DatabaseFunction(string ConnectionString, int CommandTimeout, bool NVarchar)
+    {
+        DBConnectionString = ConnectionString;
+        DBCommandTimeout = CommandTimeout;
+        IsNVarchar = NVarchar;
+    }
+
+    public DatabaseFunction(string ConnectionString, int CommandTimeout)
+    {
+        DBConnectionString = ConnectionString;
+        DBCommandTimeout = CommandTimeout;
+    }
+
+    public DatabaseFunction(string ConnectionString)
+    {
+        DBConnectionString = ConnectionString;
+        DBCommandTimeout = 600;
+    }
+
+    public DataTable FillDataInDT(string[,] ArrayParameter, string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        SqlParameter[] array = new SqlParameter[ArrayParameter.Length / 2];
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+        }
+
+        DataSet dataSet = Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public DataTable FillDataInDT(string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        DataSet dataSet = Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public DataSet FillDataInDS(string[,] ArrayParameter, string ProcedureName)
+    {
+        SqlParameter[] array = new SqlParameter[ArrayParameter.Length / 2];
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+        }
+
+        return Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+    }
+
+    public DataSet FillDataInDS(string ProcedureName)
+    {
+        return Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout);
+    }
+
+    public int RunDataBaseNonQueryCommand(string[,] ArrayParameter, string ProcedureName)
+    {
+        DataTable dataTable = new DataTable();
+        SqlParameter[] array = new SqlParameter[ArrayParameter.Length / 2];
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+        }
+
+        return Helpers.ExecuteNonQuery(DBConnectionString, CommandType.StoredProcedure, ProcedureName, DBCommandTimeout, array);
+    }
+
+    public DataTable RunDataBaseNonQueryCommandReturnDT(string[,] ArrayParameter, string ProcedureName)
+    {
+        DataTable dataTable = new DataTable();
+        return FillDataInDT(ArrayParameter, ProcedureName);
+    }
+
+    public object ExecuteScalar(string[,] ArrayParameter, string ProcedureName)
+    {
+        DataTable dataTable = new DataTable();
+        SqlParameter[] array = new SqlParameter[ArrayParameter.Length / 2];
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+        }
+
+        return Helpers.ExecuteScalar(DBConnectionString, CommandType.StoredProcedure, ProcedureName, DBCommandTimeout, array);
+    }
+
+    public bool CheckDataInTable(string[,] ArrayParameter, string ProcedureName)
+    {
+        bool result = false;
+        DataTable dataTable = new DataTable();
+        dataTable = FillDataInDT(ArrayParameter, ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = true;
+        }
+
+        return result;
+    }
+
+    public bool CheckDataInTable(string ProcedureName)
+    {
+        bool result = false;
+        DataTable dataTable = new DataTable();
+        dataTable = FillDataInDT(ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = true;
+        }
+
+        return result;
+    }
+
+    public string GetServerDate()
+    {
+        string result = "";
+        DataTable dataTable = new DataTable();
+        dataTable = FillDataInDT("SP_GetServerDate");
+        if (dataTable.Rows.Count > 0)
+        {
+            result = dataTable.Rows[0][0].ToString();
+        }
+
+        return result;
+    }
+
+    public string GetServerDate_ddMMMyyyy()
+    {
+        string text = "";
+        return Convert.ToDateTime(GetServerDate()).ToString("dd-MMM-yyyy");
+    }
+
+    public string ExecuteProcedureReturnString(string[,] ArrayParameter, string ProcedureName)
+    {
+        string result = "";
+        DataTable dataTable = new DataTable();
+        dataTable = FillDataInDT(ArrayParameter, ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = dataTable.Rows[0][0].ToString();
+        }
+
+        return result;
+    }
+
+    public string ExecuteProcedureReturnString(string ProcedureName)
+    {
+        string result = "";
+        DataTable dataTable = new DataTable();
+        dataTable = FillDataInDT(ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = dataTable.Rows[0][0].ToString();
+        }
+
+        return result;
+    }
+
+    public string ExecuteProcedureWithImage(string[,] ArrayParameter, Dictionary<string, byte[]> image, string ProcedureName)
+    {
+        string result = "";
+        DataTable dataTable = new DataTable();
+        SqlParameter[] array = new SqlParameter[image.Count + ArrayParameter.Length / 2];
+        int num = 0;
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+            num++;
+        }
+
+        foreach (KeyValuePair<string, byte[]> item in image)
+        {
+            SqlParameter sqlParameter2 = new SqlParameter(item.Key, item.Value);
+            array[num] = sqlParameter2;
+            num++;
+        }
+
+        DataSet dataSet = Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+        if (dataSet.Tables.Count > 0)
+        {
+            dataTable = dataSet.Tables[0];
+            if (dataTable.Rows.Count > 0)
+            {
+                result = dataTable.Rows[0][0].ToString();
+            }
+        }
+
+        return result;
+    }
+
+    public DataTable ExecuteProcedureWithImageReturnDT(string[,] ArrayParameter, Dictionary<string, byte[]> image, string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        SqlParameter[] array = new SqlParameter[image.Count + ArrayParameter.Length / 2];
+        int num = 0;
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+            num++;
+        }
+
+        foreach (KeyValuePair<string, byte[]> item in image)
+        {
+            SqlParameter sqlParameter2 = new SqlParameter(item.Key, item.Value);
+            array[num] = sqlParameter2;
+            num++;
+        }
+
+        DataSet dataSet = Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public string ExecuteProcedureWithTableReturnString(string[,] ArrayParameter, DataTable dtDetails, string DataTableParamName, string ProcedureName)
+    {
+        string result = "";
+        DataTable dataTable = ExecuteProcedureWithTableReturnDT(ArrayParameter, dtDetails, DataTableParamName, ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = dataTable.Rows[0][0].ToString();
+        }
+
+        return result;
+    }
+
+    public DataTable ExecuteProcedureWithTableReturnDT(string[,] ArrayParameter, Dictionary<string, DataTable> dataXML, string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        DataSet dataSet = ExecuteProcedureWithTableReturnDS(ArrayParameter, dataXML, ProcedureName);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public DataSet ExecuteProcedureWithTableReturnDS(string[,] ArrayParameter, Dictionary<string, DataTable> dataXML, string ProcedureName)
+    {
+        DataTable dataTable = new DataTable();
+        SqlParameter[] array = new SqlParameter[ArrayParameter.Length / 2 + dataXML.Count];
+        int num = 0;
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+            num++;
+        }
+
+        foreach (KeyValuePair<string, DataTable> item in dataXML)
+        {
+            using StringWriter stringWriter = new StringWriter();
+            DataTable dataTable2 = new DataTable();
+            dataTable2 = item.Value;
+            dataTable2.WriteXml((TextWriter?)stringWriter);
+            string value2 = stringWriter.ToString();
+            SqlParameter sqlParameter2 = new SqlParameter(item.Key, value2);
+            array[num] = sqlParameter2;
+            num++;
+        }
+
+        return Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+    }
+
+    public DataTable ExecuteProcedureWithTableReturnDT(string[,] ArrayParameter, DataTable dtDetails, string DataTableParamName, string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        DataSet dataSet = ExecuteProcedureWithTableReturnDS(ArrayParameter, dtDetails, DataTableParamName, ProcedureName);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public DataSet ExecuteProcedureWithTableReturnDS(string[,] ArrayParameter, DataTable dtDetails, string DataTableParamName, string ProcedureName)
+    {
+        DataTable dataTable = new DataTable();
+        SqlParameter[] array = new SqlParameter[ArrayParameter.Length / 2 + 1];
+        int num = 0;
+        for (int i = 0; i <= ArrayParameter.GetUpperBound(0); i++)
+        {
+            string parameterName = ArrayParameter[i, 0];
+            string value = ArrayParameter[i, 1];
+            SqlParameter sqlParameter = new SqlParameter(parameterName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[i] = sqlParameter;
+            num++;
+        }
+
+        using (StringWriter stringWriter = new StringWriter())
+        {
+            dtDetails.WriteXml((TextWriter?)stringWriter);
+            string value2 = stringWriter.ToString();
+            SqlParameter sqlParameter2 = new SqlParameter(DataTableParamName, value2);
+            array[num] = sqlParameter2;
+        }
+
+        return Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+    }
+
+    public string ExecuteProcedureWithTableReturnString(DataTable dtDetails, string DataTableParamName, string ProcedureName)
+    {
+        string result = "";
+        DataTable dataTable = ExecuteProcedureWithTableReturnDT(dtDetails, DataTableParamName, ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = dataTable.Rows[0][0].ToString();
+        }
+
+        return result;
+    }
+
+    public DataTable ExecuteProcedureWithTableReturnDT(DataTable dtDetails, string DataTableParamName, string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        DataSet dataSet = ExecuteProcedureWithTableReturnDS(dtDetails, DataTableParamName, ProcedureName);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public DataSet ExecuteProcedureWithTableReturnDS(DataTable dtDetails, string DataTableParamName, string ProcedureName)
+    {
+        DataTable dataTable = new DataTable();
+        SqlParameter[] array = new SqlParameter[1];
+        using (StringWriter stringWriter = new StringWriter())
+        {
+            dtDetails.WriteXml((TextWriter?)stringWriter);
+            string value = stringWriter.ToString();
+            SqlParameter sqlParameter = new SqlParameter(DataTableParamName, value);
+            if (IsNVarchar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            array[0] = sqlParameter;
+        }
+
+        return Helpers.ExcuteDataSet(DBConnectionString, ProcedureName, DBCommandTimeout, array);
+    }
+
+    public DataTable FillDataInDT(Hashtable HashParameter, string ProcedureName)
+    {
+        DataTable result = new DataTable();
+        DataSet dataSet = FillDataInDS(HashParameter, ProcedureName);
+        if (dataSet.Tables.Count > 0)
+        {
+            result = dataSet.Tables[0];
+        }
+
+        return result;
+    }
+
+    public string ExecuteProcedureReturnString(Hashtable HashParameter, string ProcedureName)
+    {
+        string result = "";
+        DataTable dataTable = new DataTable();
+        dataTable = FillDataInDT(HashParameter, ProcedureName);
+        if (dataTable.Rows.Count > 0)
+        {
+            result = dataTable.Rows[0][0].ToString();
+        }
+
+        return result;
+    }
+
+    public DataSet FillDataInDS(Hashtable HashParameter, string ProcedureName)
+    {
+        SqlConnection sqlConnection = new SqlConnection(DBConnectionString);
+        if (ProcedureName == null)
+        {
+            throw new ArgumentNullException("Procedure Name Can Not be null");
+        }
+
+        if (ProcedureName.Trim().Equals(""))
+        {
+            throw new ArgumentException("Procedure Name Can Not be blank");
+        }
+
+        SqlParameter sqlParameter = null;
+        SqlCommand sqlCommand = new SqlCommand();
+        sqlCommand = sqlConnection.CreateCommand();
+        sqlCommand.CommandType = CommandType.StoredProcedure;
+        sqlCommand.CommandTimeout = DBCommandTimeout;
+        sqlCommand.CommandText = ProcedureName;
+        if (HashParameter != null)
+        {
+            if (HashParameter.Count == 0)
+            {
+                throw new ArgumentException("HashTable size cannot be zero");
+            }
+
+            foreach (DictionaryEntry item in HashParameter)
+            {
+                sqlParameter = new SqlParameter();
+                sqlParameter.ParameterName = item.Key.ToString();
+                Type type = ((item.Value == null) ? null : item.Value.GetType());
+                if (type == typeof(byte[]))
+                {
+                    sqlParameter.SqlDbType = SqlDbType.Image;
+                }
+                else
+                {
+                    sqlParameter.SqlDbType = GetParameterDBType(type);
+                    if (IsNVarchar && sqlParameter.SqlDbType == SqlDbType.VarChar)
+                    {
+                        sqlParameter.SqlDbType = SqlDbType.NVarChar;
+                    }
+                }
+
+                sqlParameter.Value = ((item.Value == DBNull.Value || item.Value == null) ? DBNull.Value : item.Value);
+                sqlCommand.Parameters.Add(sqlParameter);
+            }
+        }
+
+        DataSet dataSet;
+        try
+        {
+            if (sqlConnection.State == ConnectionState.Closed)
+            {
+                sqlConnection.Open();
+            }
+
+            SqlDataAdapter sqlDataAdapter = new SqlDataAdapter(sqlCommand);
+            dataSet = new DataSet();
+            sqlDataAdapter.Fill(dataSet);
+        }
+        catch (Exception ex)
+        {
+            throw ex;
+        }
+        finally
+        {
+            sqlCommand.Dispose();
+            sqlCommand = null;
+            sqlConnection.Close();
+        }
+
+        return dataSet;
+    }
+
+    public void AsyncExecuteProcedures(Hashtable HashParameter, string ProcedureName)
+    {
+        executeProceduresWithoutResultDelegate executeProceduresWithoutResultDelegate = ExecuteProceduresWithoutResult;
+        executeProceduresWithoutResultDelegate.BeginInvoke(HashParameter, ProcedureName, null, null);
+    }
+
+    private void ExecuteProceduresWithoutResult(Hashtable HashParameter, string ProcedureName)
+    {
+        SqlConnection sqlConnection = new SqlConnection(DBConnectionString);
+        if (ProcedureName == null)
+        {
+            throw new ArgumentNullException("ProcedureName cannot be null");
+        }
+
+        if (ProcedureName.Trim().Equals(""))
+        {
+            throw new ArgumentException("ProcedureName cannot be blank");
+        }
+
+        if (HashParameter.Count == 0)
+        {
+            throw new ArgumentException("HashTable size cannot be zero");
+        }
+
+        if (HashParameter == null)
+        {
+            throw new ArgumentNullException("HashTable cannot be null");
+        }
+
+        SqlParameter sqlParameter = null;
+        SqlCommand sqlCommand = new SqlCommand();
+        sqlCommand = sqlConnection.CreateCommand();
+        sqlCommand.CommandType = CommandType.StoredProcedure;
+        sqlCommand.CommandTimeout = DBCommandTimeout;
+        sqlCommand.CommandText = ProcedureName;
+        foreach (DictionaryEntry item in HashParameter)
+        {
+            sqlParameter = new SqlParameter();
+            sqlParameter.ParameterName = item.Key.ToString();
+            sqlParameter.SqlDbType = GetParameterDBType(item.Value.GetType());
+            if (IsNVarchar && sqlParameter.SqlDbType == SqlDbType.VarChar)
+            {
+                sqlParameter.SqlDbType = SqlDbType.NVarChar;
+            }
+
+            sqlParameter.Value = ((item.Value == DBNull.Value || item.Value == null) ? DBNull.Value : item.Value);
+            sqlCommand.Parameters.Add(sqlParameter);
+        }
+
+        try
+        {
+            if (sqlConnection.State == ConnectionState.Closed)
+            {
+                sqlConnection.Open();
+            }
+
+            sqlCommand.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            throw ex;
+        }
+        finally
+        {
+            sqlCommand.Dispose();
+            sqlCommand = null;
+            sqlConnection.Close();
+        }
+    }
+
+    private SqlDbType GetParameterDBType(Type type)
+    {
+        SqlDbType result = SqlDbType.VarChar;
+        switch (Type.GetTypeCode(type))
+        {
+            case TypeCode.Int32:
+                result = SqlDbType.Int;
+                break;
+            case TypeCode.String:
+                result = SqlDbType.VarChar;
+                break;
+            case TypeCode.Double:
+                result = SqlDbType.Decimal;
+                break;
+            case TypeCode.DateTime:
+                result = SqlDbType.DateTime;
+                break;
+            case TypeCode.Boolean:
+                result = SqlDbType.Bit;
+                break;
+            case TypeCode.DBNull:
+                result = SqlDbType.VarChar;
+                break;
+            case TypeCode.Object:
+                result = SqlDbType.Structured;
+                break;
+        }
+
+        return result;
+    }
+
+    public DataTable ImportBulkData(DataTable dt, string ProcedureName, string ColumnMappingTableName, string MappingExcelColumnName, string MappingProcParamColumnName, string MappingAutoColumnName, string MappingRowID, string[,] AdditionalParam, string AutoIncrementParamName, bool isCursor)
+    {
+        DataTable result = new DataTable();
+        string text = "";
+        string text2 = "";
+        string text3 = "";
+        string text4 = "";
+        string text5 = "";
+        int num = 1;
+        int num2 = 1;
+        bool flag = false;
+        try
+        {
+            if (ColumnMappingTableName.Trim() != "" && MappingExcelColumnName.Trim() != "" && MappingProcParamColumnName.Trim() != "" && MappingAutoColumnName.Trim() != "" && MappingRowID.Trim() != "")
+            {
+                DataSet dataSet = Helpers.ExcuteQueryDataSet(DBConnectionString, "SELECT * FROM " + ColumnMappingTableName + " where " + MappingAutoColumnName + " = '" + MappingRowID + "'", DBCommandTimeout);
+                if (dataSet.Tables.Count <= 0 && dataSet.Tables[0].Rows.Count <= 0)
+                {
+                    throw new Exception("Record Not Found in Mapping Table.");
+                }
+
+                text2 = dataSet.Tables[0].Rows[0][MappingExcelColumnName].ToString();
+                text3 = dataSet.Tables[0].Rows[0][MappingProcParamColumnName].ToString();
+                if (text2.Split(new char[1] { ',' }).Length != text3.Split(new char[1] { ',' }).Length)
+                {
+                    throw new Exception("Excel Column and Procedure Column Mapping is not proper.");
+                }
+
+                flag = true;
+            }
+
+            while (text == "")
+            {
+                string text6 = "Import_Temp_Table_" + num;
+                DataSet dataSet2 = new DataSet();
+                dataSet2 = Helpers.ExcuteQueryDataSet(DBConnectionString, "SELECT * FROM sysobjects where name = '" + text6 + "'", DBCommandTimeout);
+                if (dataSet2.Tables.Count == 0 || dataSet2.Tables[0].Rows.Count == 0)
+                {
+                    text = text6;
+                    num2 = 1;
+                    foreach (DataColumn column in dt.Columns)
+                    {
+                        if (num2 == 1)
+                        {
+                            Helpers.ExcuteQueryDataSet(DBConnectionString, "CREATE TABLE " + text + " (" + column.ColumnName + " varchar(MAX))", DBCommandTimeout);
+                        }
+                        else
+                        {
+                            Helpers.ExcuteQueryDataSet(DBConnectionString, "ALTER TABLE " + text + " ADD " + column.ColumnName + " varchar(MAX)", DBCommandTimeout);
+                        }
+
+                        num2++;
+                    }
+
+                    Helpers.ExcuteQueryDataSet(DBConnectionString, "ALTER TABLE " + text + " ADD AutoID Numeric(18,0) Identity(1,1) Primary Key", DBCommandTimeout);
+                    using SqlConnection sqlConnection = new SqlConnection(DBConnectionString);
+                    using SqlBulkCopy sqlBulkCopy = new SqlBulkCopy(sqlConnection);
+                    sqlBulkCopy.DestinationTableName = text;
+                    sqlConnection.Open();
+                    sqlBulkCopy.WriteToServer(dt);
+                    sqlConnection.Close();
+                }
+
+                num++;
+            }
+
+            num = 1;
+            if (text.Trim() != "" && flag)
+            {
+                while (text5 == "")
+                {
+                    string text7 = "Import_Temp_Proc_" + num;
+                    DataSet dataSet2 = new DataSet();
+                    dataSet2 = Helpers.ExcuteQueryDataSet(DBConnectionString, "SELECT * FROM sysobjects where name = '" + text7 + "'", DBCommandTimeout);
+                    if (dataSet2.Tables.Count == 0 || dataSet2.Tables[0].Rows.Count == 0)
+                    {
+                        text5 = text7;
+                        if (isCursor)
+                        {
+                            text4 = "Create Proc " + text5 + Environment.NewLine;
+                            text4 = text4 + "As" + Environment.NewLine;
+                            text4 = text4 + "Begin" + Environment.NewLine;
+                            string[] array = text3.Split(new char[1] { ',' });
+                            foreach (string text8 in array)
+                            {
+                                text4 = text4 + "Declare " + text8 + " Varchar(Max)" + Environment.NewLine;
+                            }
+
+                            text4 = text4 + "Declare @Count Int" + Environment.NewLine;
+                            text4 = text4 + "Set @Count =0" + Environment.NewLine;
+                            text4 = text4 + "Declare @AutoID Int" + Environment.NewLine;
+                            text4 = text4 + "Declare @mCursor Cursor" + Environment.NewLine;
+                            text4 = text4 + "Set @mCursor=Cursor LOCAL FAST_FORWARD For Select AutoID," + text2 + " From " + text + Environment.NewLine;
+                            text4 = text4 + "Open @mCursor" + Environment.NewLine;
+                            text4 = text4 + "Fetch Next From @mCursor Into @AutoID," + text3 + Environment.NewLine;
+                            text4 = text4 + "WHILE @@FETCH_STATUS = 0" + Environment.NewLine;
+                            text4 = text4 + "Begin" + Environment.NewLine;
+                            text4 = text4 + "Set @Count=@Count+1" + Environment.NewLine;
+                            num2 = 1;
+                            string[] array2 = text3.Split(new char[1] { ',' });
+                            foreach (string text9 in array2)
+                            {
+                                text4 = ((num2 != 1) ? (text4 + "," + text9 + "=" + text9) : (text4 + "exec " + ProcedureName + " " + text9 + "=" + text9));
+                                num2++;
+                            }
+
+                            if (AdditionalParam.Length > 0)
+                            {
+                                for (int k = 0; k <= AdditionalParam.GetUpperBound(0); k++)
+                                {
+                                    string text10 = AdditionalParam[k, 0];
+                                    string text11 = AdditionalParam[k, 1];
+                                    text4 = text4 + "," + text10 + "=" + text11;
+                                }
+                            }
+
+                            if (AutoIncrementParamName.Trim() != "")
+                            {
+                                text4 = text4 + "," + AutoIncrementParamName + "=@Count";
+                            }
+
+                            text4 += ",@AutoID=@AutoID";
+                            text4 = text4 + ",@TableName='" + text + "'";
+                            text4 += Environment.NewLine;
+                            string[] array3 = text3.Split(new char[1] { ',' });
+                            foreach (string text12 in array3)
+                            {
+                                text4 = text4 + "Set " + text12 + "=NULL" + Environment.NewLine;
+                            }
+
+                            text4 = text4 + "Fetch Next From @mCursor Into @AutoID," + text3 + Environment.NewLine;
+                            text4 = text4 + "End" + Environment.NewLine;
+                            text4 = text4 + "CLOSE @mCursor" + Environment.NewLine;
+                            text4 = text4 + "DEALLOCATE @mCursor" + Environment.NewLine;
+                            text4 = text4 + "End" + Environment.NewLine;
+                        }
+                        else
+                        {
+                            text4 = "Create Proc " + text5 + Environment.NewLine;
+                            text4 = text4 + "As" + Environment.NewLine;
+                            text4 = text4 + "Begin" + Environment.NewLine;
+                            string[] array4 = text3.Split(new char[1] { ',' });
+                            foreach (string text13 in array4)
+                            {
+                                text4 = text4 + "Declare " + text13 + " Varchar(Max)" + Environment.NewLine;
+                            }
+
+                            text4 = text4 + "Declare @Count Int" + Environment.NewLine;
+                            text4 = text4 + "Declare @RowCount Int" + Environment.NewLine;
+                            text4 = text4 + "Set @Count =0" + Environment.NewLine;
+                            text4 = text4 + "Declare @AutoID Int" + Environment.NewLine;
+                            text4 = text4 + "Select ROW_NUMBER()Over(Order By AutoID) As RowNumber,AutoID," + text2 + " Into #Temp From " + text + Environment.NewLine;
+                            text4 = text4 + "Select @RowCount=Count(*) From #Temp" + Environment.NewLine;
+                            text4 = text4 + "While @Count<@RowCount" + Environment.NewLine;
+                            text4 = text4 + "Begin" + Environment.NewLine;
+                            text4 = text4 + "Set @Count=@Count+1" + Environment.NewLine;
+                            text4 += "Select @AutoID=AutoID";
+                            for (int num3 = 0; num3 < text3.Split(new char[1] { ',' }).Length; num3++)
+                            {
+                                text4 = text4 + "," + text3.Split(new char[1] { ',' })[num3].ToString() + "=" + text2.Split(new char[1] { ',' })[num3].ToString();
+                            }
+
+                            text4 = text4 + " From #Temp Where RowNumber=@Count" + Environment.NewLine;
+                            num2 = 1;
+                            string[] array5 = text3.Split(new char[1] { ',' });
+                            foreach (string text14 in array5)
+                            {
+                                text4 = ((num2 != 1) ? (text4 + "," + text14 + "=" + text14) : (text4 + "exec " + ProcedureName + " " + text14 + "=" + text14));
+                                num2++;
+                            }
+
+                            if (AdditionalParam.Length > 0)
+                            {
+                                for (int num4 = 0; num4 <= AdditionalParam.GetUpperBound(0); num4++)
+                                {
+                                    string text15 = AdditionalParam[num4, 0];
+                                    string text16 = AdditionalParam[num4, 1];
+                                    text4 = text4 + "," + text15 + "=" + text16;
+                                }
+                            }
+
+                            if (AutoIncrementParamName.Trim() != "")
+                            {
+                                text4 = text4 + "," + AutoIncrementParamName + "=@Count";
+                            }
+
+                            text4 += ",@AutoID=@AutoID";
+                            text4 = text4 + ",@TableName='" + text + "'";
+                            text4 += Environment.NewLine;
+                            string[] array6 = text3.Split(new char[1] { ',' });
+                            foreach (string text17 in array6)
+                            {
+                                text4 = text4 + "Set " + text17 + "=NULL" + Environment.NewLine;
+                            }
+
+                            text4 = text4 + "End" + Environment.NewLine;
+                            text4 = text4 + "End" + Environment.NewLine;
+                        }
+                    }
+
+                    num++;
+                }
+
+                if (text5.Trim() != "" && text4.Trim() != "")
+                {
+                    Helpers.ExcuteQueryDataSet(DBConnectionString, text4, DBCommandTimeout);
+                    Helpers.ExcuteQueryDataSet(DBConnectionString, "Exec " + text5, DBCommandTimeout);
+                    DataSet dataSet2 = new DataSet();
+                    dataSet2 = Helpers.ExcuteQueryDataSet(DBConnectionString, "Select * From " + text, DBCommandTimeout);
+                    if (dataSet2.Tables.Count > 0)
+                    {
+                        result = dataSet2.Tables[0];
+                    }
+
+                    Helpers.ExcuteQueryDataSet(DBConnectionString, "Drop Table " + text, DBCommandTimeout);
+                    Helpers.ExcuteQueryDataSet(DBConnectionString, "Drop Proc " + text5, DBCommandTimeout);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            throw ex;
+        }
+
+        return result;
+    }
+}
+
